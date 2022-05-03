@@ -11,19 +11,25 @@
 #define WRITE 1
 
 int main(int argc, char* argv[]) {
-    int listen_pid;
-    if ((listen_pid = fork()) == -1) {
-        perror("fork");
-        exit(EXIT_FAILURE);
-    }
-    /* Child */
-    else if (listen_pid == 0) {
-        printf("child\n");
-        fflush(stdout);
-    }
-    /* Parent */
-    printf("parent\n");
-    fflush(stdout);
-    /* Exiting successfully */
-    exit(EXIT_SUCCESS);
+    pid_t  pid;
+  int fd[2], bytes;
+
+  if (pipe(fd) == -1){ perror("pipe"); exit(1); }
+  if ( (pid = fork()) == -1 ){ perror("fork"); exit(1); }
+
+  if ( pid != 0 ){    // parent and writer
+     close(fd[READ]);
+     dup2(fd[WRITE],1);
+     close(fd[WRITE]);
+     execlp(argv[1], argv[1], NULL);
+     perror("execlp");
+     }
+  else{                // child
+     close(fd[WRITE]);
+     dup2(fd[READ],0);
+     close(fd[READ]);
+     char buf[12];
+     scanf("%s", buf);
+     printf("%s", buf);
+     }
 }

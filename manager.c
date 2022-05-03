@@ -43,13 +43,16 @@ int main(int argc, char* argv[]) {
         close(listen_pipe[READ]);  // don't read from the pipe
         dup2(listen_pipe[WRITE],1); // send standard output to the pipe
         close(listen_pipe[WRITE]);  // close old descriptor for writing to the pipe
-        execl("./listener", "listener", path, NULL);    // execute the listener
+        //execl("./listener", "listener", path, NULL);    // execute the listener
+        execlp("inotifywait", "inotifywait", "-m", "-e", "moved_to", "-e", "create", path, NULL);
     }
     /* Parent */
     close(listen_pipe[WRITE]);  // don't write to the pipe
 
-    sleep(1);
-    kill(listen_pid, SIGINT);   // kill listener
+    //char buf[10];
+    //read(listen_pipe[READ], buf, 1);
+    //printf("%c",*buf);
+    sleep(1);kill(listen_pid, SIGINT);   // kill listener
     /* Exiting successfully */
     exit(EXIT_SUCCESS);
 }
