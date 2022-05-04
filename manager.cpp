@@ -2,7 +2,10 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <string>
+#include <vector>
+#include <cstring>
+#include <iostream>
 #include <unistd.h>
 #include <sys/types.h>
 #include <signal.h>
@@ -12,7 +15,7 @@
 
 int main(int argc, char* argv[]) {
 
-    char* path = ".";
+    std::string path = ".";
 	/* Initialising arguments */
     if ((argc != 1) && (argc != 3)) {
         fprintf(stderr, "Invalid number of arguments\n");
@@ -44,14 +47,32 @@ int main(int argc, char* argv[]) {
         dup2(listen_pipe[WRITE],1); // send standard output to the pipe
         close(listen_pipe[WRITE]);  // close old descriptor for writing to the pipe
         //execl("./listener", "listener", path, NULL);    // execute the listener
-        execlp("inotifywait", "inotifywait", "-m", "-e", "moved_to", "-e", "create", path, NULL);
+        execlp("inotifywait", "inotifywait", "-m", "-e", "moved_to", "-e", "create", path.data(), NULL);   // execute inotifywait
+        perror("execlp");
     }
     /* Parent */
     close(listen_pipe[WRITE]);  // don't write to the pipe
 
-    //char buf[10];
-    //read(listen_pipe[READ], buf, 1);
-    //printf("%c",*buf);
+    std::vector<std::string> new_files;
+    std::string new_file;
+    //std::map<std::string,int> link_nums;
+    char buf[100];
+    int nread;
+    int i;
+    while ((nread = read(listen_pipe[READ], buf, 100)) > 0) {
+        for (i = 0 ; i < nread ; i++) {
+            if (buf[i] == '\n') {
+                new_files.push_back(new_file);
+            }
+            else {
+                new_file.push_back(buf[i]);
+            }
+        }
+    }
+    new_files.push_back(new_file);
+    for(int i = 0 ; i < new_files.size();i++) {
+        std::cout << new_files[i] << std::endl;
+    }
     sleep(1);kill(listen_pid, SIGINT);   // kill listener
     /* Exiting successfully */
     exit(EXIT_SUCCESS);

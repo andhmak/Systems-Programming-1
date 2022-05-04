@@ -21,15 +21,13 @@ int main(int argc, char* argv[]) {
      close(fd[READ]);
      dup2(fd[WRITE],1);
      close(fd[WRITE]);
-     execlp(argv[1], argv[1], NULL);
+     execlp("ls", "ls", NULL);
+     //execlp("inotifywait", "inotifywait", "-m", "-e", "moved_to", "-e", "create", ".", NULL);
      perror("execlp");
      }
   else{                // child
      close(fd[WRITE]);
      dup2(fd[READ],0);
      close(fd[READ]);
-     char buf[12];
-     scanf("%s", buf);
-     printf("%s", buf);
      }
 }
