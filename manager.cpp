@@ -103,9 +103,9 @@ int main(int argc, char* argv[]) {
     sigset_t block_set;
     sigfillset(&block_set);
     std::cout << "manager starting loop" << std::endl;
-    while(!sigint_received) {
-        std::cout << "manager in big loop" << std::endl;
-        while (!sigint_received && !sigchld_received && (nread = read(listen_pipe[READ], buf, 100) > 0)) {
+    for(int b = 0;b<2;b++) {
+        std::cout << "manager in big loop "<<b << std::endl;
+        while (!sigint_received && !sigchld_received && ((nread = read(listen_pipe[READ], buf, 100)) > 0)) {
             std::cout << "manager in read loop " << nread << std::endl;
             for (i = 0 ; i < nread ; i++) {
                 printf("%c", buf[i]);
@@ -123,10 +123,12 @@ int main(int argc, char* argv[]) {
                         if (mkfifo(pipe_name.data(), 0666) < 0) {
                             perror("manager can't make fifo");
                             sigint_received = 1;
+                            break;
                         }
                         if ((worker_pid = fork()) == -1) {
                             perror("manager: worker fork");
                             sigint_received = 1;
+                            break;
                         }
                         else if (worker_pid == 0) {
                             //printf("creating worker\n");
@@ -138,12 +140,15 @@ int main(int argc, char* argv[]) {
                         if ((new_pipe_fd = open(pipe_name.data(), O_WRONLY)) < 0) {
                             perror("manager can't open fifo");
                             sigint_received = 1;
+                            break;
                         }
                         worker_to_pipe[worker_pid] = new_pipe_fd;
                         if (write(new_pipe_fd, new_file.data(), new_file.size()) != new_file.size()) {
                             perror("manager can't write in fifo");
                             sigint_received = 1;
+                            break;
                         }
+                        num_workers++;
                     }
                     else {
                         int available_worker = available_workers.front();
@@ -173,8 +178,15 @@ int main(int argc, char* argv[]) {
             int proc_status;
             int child_pid;
             while ((child_pid = waitpid(-1, &proc_status, WNOHANG | WUNTRACED)) > 0) {
-                if (WIFSTOPPED(proc_status) && (WSTOPSIG(proc_status) == SIGSTOP)) {
-                    available_workers.push(child_pid);
+                printf("a");
+                fflush(stdout);
+                if (WIFSTOPPED(proc_status)) {
+                    if (WSTOPSIG(proc_status) == SIGSTOP) {
+                        available_workers.push(child_pid);
+                    }
+                }
+                else {
+                    num_workers--;
                 }
             }
             if (child_pid == -1) {
@@ -184,10 +196,16 @@ int main(int argc, char* argv[]) {
         }
     }
     printf("jjejeje");
+    fflush(stdout);
+    kill(listen_pid, SIGINT);   // kill listener
     int child_pid;
     int proc_status;
-    while ((child_pid = waitpid(-1, &proc_status, WUNTRACED)) > 0);
+    while (available_workers.size() != num_workers) {
+        waitpid(-1, &proc_status, WUNTRACED);
+        num_workers--;
+    }
     for (int i = 0 ; i < worker_pids.size() ; i++) {
+        kill(worker_pids[i], SIGCONT);
         kill(worker_pids[i], SIGINT);
         close(worker_to_pipe[worker_pids[i]]);
         std::string pipe_name = std::to_string(i);
@@ -196,11 +214,12 @@ int main(int argc, char* argv[]) {
             exit(EXIT_FAILURE);
         }
     }
+    //while ((child_pid = waitpid(-1, &proc_status, WNOHANG)) > 0);
     //new_files.push_back(new_file);
     /*for(int i = 0 ; i < new_files.size();i++) {
         std::cout << new_files[i] << std::endl;
     }*/
-    sleep(1);kill(listen_pid, SIGINT);   // kill listener
+    while(1);
     /* Exiting successfully */
     exit(EXIT_SUCCESS);
 }

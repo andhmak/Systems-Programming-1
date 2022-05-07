@@ -14,18 +14,11 @@
 #define PERMS 0644
 #define OUTPUT_FILE "output/"
 
-#define READ 0
-#define WRITE 1
-
 volatile sig_atomic_t sigint_received = 0;
-volatile sig_atomic_t sigcont_received = 1;
 
 void catchint (int signo) {
+    write(1, "got signal\n", 11);
     sigint_received = 1;
-}
-
-void catchcont (int signo) {
-    sigcont_received = 1;
 }
 
 int main(int argc, char* argv[]) {
@@ -34,10 +27,14 @@ int main(int argc, char* argv[]) {
     sigfillset(&(act.sa_mask));
     sigaction(SIGINT, &act, NULL);
 
-    act.sa_handler = catchcont;
-    sigaction(SIGCONT, &act, NULL);
+    sigset_t block_set;
+    sigfillset(&block_set);
 
-    //std::cout << "worker created " <<std::endl;
+    //act.sa_flags = SA_RESTART;
+    //sigaction(SIGCONT, &act, NULL);
+
+    std::cout << "worker created " <<std::endl;
+    fflush(stdout);
     std::string pipe_name = argv[1];
     int pipe_fd;
     if ((pipe_fd = open(pipe_name.data(), O_RDONLY)) == -1) {
@@ -48,30 +45,70 @@ int main(int argc, char* argv[]) {
     FD_ZERO(&fds);
     FD_SET(pipe_fd, &fds);
     struct timeval timeout = {0,0};
-    while (sigcont_received && !sigint_received) {
-        sigcont_received = 0;
+    while (!sigint_received) {
+        //sigprocmask(SIG_SETMASK, &block_set, NULL);
+        printf("worker loop\n");
+        fflush(stdout);
         char buf[100];
         std::string in_file_name;
         int nread;
-        while ((nread = read(pipe_fd, buf, 100)) > 0) {
+        for (int i =0;i<5;i++) {
+            nread = read(pipe_fd, buf, 100);
+            printf("nread %d\n", nread);
+            fflush(stdout);
+            if (nread == 0) {
+                printf("nread == 0\n");
+                fflush(stdout);
+                //if (errno == EINTR) {
+                //printf("errno == EINTR\n");
+                //fflush(stdout);
+                if (sigint_received) {
+                    printf("sigint_received\n");
+                    fflush(stdout);
+                    close(pipe_fd);
+                    exit(EXIT_SUCCESS);
+                }
+                else {
+                    printf("not sigint_received\n");
+                    fflush(stdout);
+                    continue;
+                }
+                //}
+                //else {
+                //    printf("errno != EINTR\n");
+                //    fflush(stdout);
+                //    perror("worker read fifo");
+                //    close(pipe_fd);
+                //    exit(EXIT_FAILURE);
+                //}
+            }
             std::string from_pipe(buf);
-            //std::cout << from_pipe << std::endl;
+            std::cout << from_pipe << std::endl;
             in_file_name.append(from_pipe.substr(0, nread));
             if (select(pipe_fd+1, &fds, (fd_set *) 0, (fd_set *) 0, &timeout) == 0) {
                 break;
             }
         }
-        if (nread == -1) {
-            perror("worker read fifo");
-            close(pipe_fd);
-            exit(EXIT_FAILURE);    
+        if (!nread) {
+            printf("sfgd");
+            fflush(stdout);
         }
-        std::cout << "worker working on " + in_file_name<<std::endl;
+        if (sigint_received) {
+            break;
+        }
+        std::cout << "worker working on " + in_file_name <<std::endl;
+        std::cout << in_file_name <<std::endl;
+        if (sigint_received) {
+            break;
+        }
         int in_fd;
         if ((in_fd = open(in_file_name.data(), O_RDONLY)) == -1) {
             perror("worker open input");
             close(pipe_fd);
             exit(EXIT_FAILURE);
+        }
+        if (sigint_received) {
+            break;
         }
         std::string link;
         std::map<std::string,int> link_nums;
@@ -172,13 +209,14 @@ int main(int argc, char* argv[]) {
         }
         close(out_fd);
 
+        //sigprocmask(SIG_UNBLOCK, &block_set, NULL);
         if (raise(SIGSTOP) != 0) {
             perror("worker raise SIGSTOP");
             close(pipe_fd);
             exit(EXIT_FAILURE);
         }
     }
-    printf("worker exiting");
+    printf("worker exiting %s, %d\n", argv[1], sigint_received);
     close(pipe_fd);
     return (EXIT_SUCCESS);
 }
