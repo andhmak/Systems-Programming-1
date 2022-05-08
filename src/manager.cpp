@@ -27,8 +27,13 @@ struct worker {
 
 volatile sig_atomic_t sigint_received = 0;
 volatile sig_atomic_t sigchld_received = 0;
+volatile sig_atomic_t listen_read_fd = 0;
 
 void catchint (int signo) {
+    write(1, "got signal\n", 11);
+    if (listen_read_fd) {
+        fcntl(listen_read_fd, F_SETFL, fcntl(listen_read_fd, F_GETFL, 0) | O_NONBLOCK);
+    }
     sigint_received = 1;
 }
 void catchchld (int signo) {
@@ -66,6 +71,7 @@ int main(int argc, char* argv[]) {
         perror("manager pipe");
         exit(EXIT_FAILURE);
     }
+    listen_read_fd = listen_pipe[READ];
     if ((listen_pid = fork()) == -1) {
         perror("manager: listener fork");
         exit(EXIT_FAILURE);
@@ -103,9 +109,10 @@ int main(int argc, char* argv[]) {
     sigset_t block_set;
     sigfillset(&block_set);
     std::cout << "manager starting loop" << std::endl;
-    for(int b = 0;b<2;b++) {
-        std::cout << "manager in big loop "<<b << std::endl;
-        while (!sigint_received && !sigchld_received && ((nread = read(listen_pipe[READ], buf, 100)) > 0)) {
+    /*for (int b = 0;b<2;b++)*/
+    while (!sigint_received) {
+        std::cout << "manager in big loop "/*<<b */<< std::endl;
+        while (!sigint_received && !sigchld_received && ((nread = read(listen_pipe[READ], buf, 50)) > 0)) {
             std::cout << "manager in read loop " << nread << std::endl;
             for (i = 0 ; i < nread ; i++) {
                 printf("%c", buf[i]);
@@ -119,7 +126,7 @@ int main(int argc, char* argv[]) {
                     std::cout << "manager found " + new_file << std::endl;
                     //std::cout << "manager found " + new_file<<std::endl;
                     if (available_workers.empty()) {  // if there are no available workers
-                        std::string pipe_name = std::to_string(worker_pids.size());    // make named pipe
+                        std::string pipe_name = "pipes/" + std::to_string(worker_pids.size());    // make named pipe
                         if (mkfifo(pipe_name.data(), 0666) < 0) {
                             perror("manager can't make fifo");
                             sigint_received = 1;
@@ -132,7 +139,7 @@ int main(int argc, char* argv[]) {
                         }
                         else if (worker_pid == 0) {
                             //printf("creating worker\n");
-                            execl("worker", "worker", pipe_name.data(), NULL);   // execute worker
+                            execl("./bin/worker", "worker", pipe_name.data(), NULL);   // execute worker
                             perror("worker execlp");
                             exit(EXIT_FAILURE);
                         }
@@ -205,21 +212,36 @@ int main(int argc, char* argv[]) {
         num_workers--;
     }
     for (int i = 0 ; i < worker_pids.size() ; i++) {
+        printf("continuing worker...");
+        fflush(stdout);
         kill(worker_pids[i], SIGCONT);
-        kill(worker_pids[i], SIGINT);
+        sleep(1);
+        sleep(1);
+        sleep(1);
+        sleep(1);
+        printf("interrupting worker...");
+        fflush(stdout);
+        kill(worker_pids[i], SIGTERM);
+        sleep(4);
+        printf("closing fifo...");
+        fflush(stdout);
         close(worker_to_pipe[worker_pids[i]]);
-        std::string pipe_name = std::to_string(i);
+        sleep(1);
+        std::string pipe_name = "pipes/" + std::to_string(i);
+        printf("unlinking fifo...");
+        fflush(stdout);
         if (unlink(pipe_name.data()) < 0) {
             perror("manager can't unlink fifo\n");
             exit(EXIT_FAILURE);
         }
+        sleep(1);
     }
-    //while ((child_pid = waitpid(-1, &proc_status, WNOHANG)) > 0);
+    while (waitpid(-1, &proc_status, 0) > 0);
     //new_files.push_back(new_file);
     /*for(int i = 0 ; i < new_files.size();i++) {
         std::cout << new_files[i] << std::endl;
     }*/
-    while(1);
+    //while(1);
     /* Exiting successfully */
     exit(EXIT_SUCCESS);
 }

@@ -1,175 +1,227 @@
-/* File: manager.c */
+/* File: worker.c */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
-#include <vector>
-#include <queue>
-#include <cstring>
 #include <map>
-#include <iostream>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <signal.h>
-#include <sys/errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <signal.h>
+#include <iostream>
 
-#define READ 0
-#define WRITE 1
+#define PERMS 0644
+#define OUTPUT_FILE "output/"
 
-struct worker {
-    int pid;
-    std::string pipe_name;
-};
+volatile sig_atomic_t sigterm_received = 0;
 
-volatile sig_atomic_t sigint_received = 0;
-volatile sig_atomic_t sigchld_received = 0;
-
-void catchint (int signo) {
-    sigint_received = 1;
-}
-void catchchld (int signo) {
-    sigchld_received = 1;
+void catchterm (int signo) {
+    write(1, "got signal\n", 11);
+    sigterm_received = 1;
 }
 
 int main(int argc, char* argv[]) {
     static struct sigaction act;
-    act.sa_handler = catchint;
+    act.sa_flags = 0;
+    act.sa_handler = catchterm;
     sigfillset(&(act.sa_mask));
+    sigaction(SIGTERM, &act, NULL);
+    
+    act.sa_handler = SIG_IGN;
     sigaction(SIGINT, &act, NULL);
 
-    act.sa_handler = catchchld;
-    sigfillset(&(act.sa_mask));
-    sigaction(SIGCHLD, &act, NULL);
-
-    std::string path = ".";
-	/* Initialising arguments */
-    if ((argc != 1) && (argc != 3)) {
-        fprintf(stderr, "Invalid number of arguments\n");
-        exit(EXIT_FAILURE);
-    }
-    if (argc == 3) {
-        if (strcmp(argv[1], "-p")) {
-            fprintf(stderr, "sniffer: invalid option -- '%s'\n", argv[1]);
-            exit(EXIT_FAILURE);
-        }
-        path = argv[2];
-    }
-
-    pid_t listen_pid;
-    int listen_pipe[2];
-
-    /* Opening pipe */
-    if (pipe(listen_pipe) == -1) {
-        perror("manager pipe");
-        exit(EXIT_FAILURE);
-    }
-    if ((listen_pid = fork()) == -1) {
-        perror("manager: listener fork");
-        exit(EXIT_FAILURE);
-    }
-    /* Child */
-    else if (listen_pid == 0) {
-        close(listen_pipe[READ]);  // don't read from the pipe
-        dup2(listen_pipe[WRITE],1); // send standard output to the pipe
-        close(listen_pipe[WRITE]);  // close old descriptor for writing to the pipe
-        //execl("./listener", "listener", path, NULL);    // execute the listener
-        execlp("inotifywait", "inotifywait", "-m", "-e", "moved_to", "-e", "create", path.data(), NULL);   // execute inotifywait
-        perror("listener execlp");
-    }
-    /* Parent */
-    close(listen_pipe[WRITE]);  // don't write to the pipe
-
-
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(listen_pipe[READ], &fds);
-    struct timeval timeout = {0,0};
-    std::map<int,int> worker_to_pipe;
-    std::string new_file;
-    std::queue<int> available_workers;
-    std::vector<int> worker_pids;
-    std::vector<std::string> new_files;
-    char buf[100];
-    int nread;
-    int num_workers;
-    int worker_pid;
-    int i;
-    int new_pipe_fd;
-    int state = 0;
     sigset_t block_set;
     sigfillset(&block_set);
-    while(!sigint_received) {
-        while (!sigint_received && !sigchld_received && ((nread = read(listen_pipe[READ], buf, 100)) > 0)) {
-            std::cout << "manager in read loop " << nread << std::endl;
-            for (i = 0 ; i < nread ; i++) {
-                printf("%c", buf[i]);
-                if (buf[i] == ' ') {
-                    state++;
+
+    //act.sa_flags = SA_RESTART;
+    //sigaction(SIGCONT, &act, NULL);
+
+    std::cout << "worker created " <<std::endl;
+    fflush(stdout);
+    std::string pipe_name = argv[1];
+    int pipe_fd;
+    if ((pipe_fd = open(pipe_name.data(), O_RDONLY)) == -1) {
+        perror("worker open fifo");
+        exit(EXIT_FAILURE);
+    }
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(pipe_fd, &fds);
+    struct timeval timeout = {0,0};
+    while (!sigterm_received) {
+        //sigprocmask(SIG_SETMASK, &block_set, NULL);
+        printf("worker loop\n");
+        fflush(stdout);
+        char buf[100];
+        std::string in_file_name;
+        int nread;
+        for (int i =0;i<5;i++) {
+            printf("waiting on read\n");
+            nread = read(pipe_fd, buf, 100);
+            printf("nread %d\n", nread);
+            fflush(stdout);
+            if (nread == 0) {
+                printf("nread == 0\n");
+                fflush(stdout);
+                //if (errno == EINTR) {
+                //printf("errno == EINTR\n");
+                //fflush(stdout);
+                if (sigterm_received) {
+                    printf("sigterm_received\n");
+                    fflush(stdout);
+                    close(pipe_fd);
+                    exit(EXIT_SUCCESS);
+                }
+                else {
+                    printf("not sigterm_received\n");
+                    fflush(stdout);
                     continue;
                 }
-                if (buf[i] == '\n') {
-                    sigprocmask(SIG_SETMASK, &block_set, NULL);
-                    new_file = path + "/" + new_file;
-                    //std::cout << "manager found " + new_file<<std::endl;
-                    if (available_workers.empty()) {  // if there are no available workers
-                        std::string pipe_name = std::to_string(worker_pids.size());    // make named pipe
-                        if (mkfifo(pipe_name.data(), 0666) < 0) {
-                            perror("manager can't make fifo");
-                            exit(EXIT_FAILURE);
+                //}
+                //else {
+                //    printf("errno != EINTR\n");
+                //    fflush(stdout);
+                //    perror("worker read fifo");
+                //    close(pipe_fd);
+                //    exit(EXIT_FAILURE);
+                //}
+            }
+            std::string from_pipe(buf);
+            std::cout << from_pipe << std::endl;
+            in_file_name.append(from_pipe.substr(0, nread));
+            if (select(pipe_fd+1, &fds, (fd_set *) 0, (fd_set *) 0, &timeout) == 0) {
+                break;
+            }
+        }
+        if (!nread) {
+            printf("sfgd");
+            fflush(stdout);
+        }
+        if (sigterm_received) {
+            break;
+        }
+        std::cout << "worker working on " + in_file_name <<std::endl;
+        std::cout << in_file_name <<std::endl;
+        if (sigterm_received) {
+            break;
+        }
+        int in_fd;
+        if ((in_fd = open(in_file_name.data(), O_RDONLY)) == -1) {
+            perror("worker open input");
+            close(pipe_fd);
+            exit(EXIT_FAILURE);
+        }
+        if (sigterm_received) {
+            break;
+        }
+        std::string link;
+        std::map<std::string,int> link_nums;
+        char state = 0;
+        while ((nread = read(in_fd, buf, 100)) > 0) {
+            for (int i = 0 ; i < nread ; i++) {
+                if (state == 7) {
+                    if ((buf[i] == ' ') || (buf[i] == '\n') || (buf[i] == '/')) {
+                        state = 0;
+                        if ((link.length() >= 4) && (link.substr(0,4) == "www.")) {
+                            link.erase(0,4);
                         }
-                        if ((worker_pid = fork()) == -1) {
-                            perror("manager: worker fork");
-                            exit(EXIT_FAILURE);
+                        if (link_nums.find(link) != link_nums.end()) {
+                            link_nums[link] = link_nums[link] + 1;
                         }
-                        else if (worker_pid == 0) {
-                            //printf("creating worker\n");
-                            execl("worker", "worker", pipe_name.data(), NULL);   // execute worker
-                            perror("worker execlp");
+                        else {
+                            link_nums[link] = 1;
                         }
-                        worker_pids.push_back(worker_pid);
-                        if ((new_pipe_fd = open(pipe_name.data(), O_WRONLY)) < 0) {
-                            perror("manager can't open fifo");
-                            exit(EXIT_FAILURE);
-                        }
-                        sleep(1);
-                        worker_to_pipe[worker_pid] = new_pipe_fd;
-                        if (write(new_pipe_fd, new_file.data(), new_file.size()) != new_file.size()) {
-                            perror("manager can't write in fifo");
-                            exit(EXIT_FAILURE);
-                        }
+                        link.erase();
                     }
                     else {
-                        //here wake up worker
+                        link.push_back(buf[i]);
                     }
-                    sigprocmask(SIG_UNBLOCK, &block_set, NULL);
-                    //new_files.push_back(new_file);
-                    new_file.erase();
-                    state = 0;
                 }
-                else if (state == 2) {
-                    new_file.push_back(buf[i]);
+                else {
+                    switch (buf[i]) {
+                        case 'h':
+                            state = 1;
+                            break;
+                        case 't':
+                            if ((state == 1) || (state == 2)) {
+                                state++;
+                            }
+                            else {
+                                state = 0;
+                            }
+                            break;
+                        case 'p':
+                            state = state == 3 ? 4 : 0;
+                            break;
+                        case ':':
+                            state = state == 4 ? 5 : 0;
+                            break;
+                        case '/':
+                            if ((state == 5) || (state == 6)) {
+                                state++;
+                            }
+                            else {
+                                state = 0;
+                            }
+                            break;
+                        default:
+                            state = 0;
+                            break;
+
+                    }
                 }
             }
         }
-    }
-    printf("jjejeje");
-    for (int i = 0 ; i < worker_pids.size() ; i++) {
-        kill(worker_pids[i], SIGINT);
-        close(worker_to_pipe[worker_pids[i]]);
-        std::string pipe_name = std::to_string(i);
-        if (unlink(pipe_name.data()) < 0) {
-            perror("manager can't unlink fifo\n");
+        if (nread == -1) {
+            perror("worker read input");
+            close(pipe_fd);
+            close(in_fd);
+            exit(EXIT_FAILURE);    
+        }
+        if (state == 7) {
+            if (link.substr(0,4) == "www.") {
+                link.erase(0,4);
+            }
+            if (link_nums.find(link) != link_nums.end()) {
+                link_nums[link] = link_nums[link] + 1;
+            }
+            else {
+                link_nums[link] = 1;
+            }
+        }
+        close(in_fd);
+
+        int slash_pos;
+        for (slash_pos = in_file_name.size() - 1 ; slash_pos >= 0 ; slash_pos--) {
+            if (in_file_name[slash_pos] == '/') {
+                break;
+            }
+        }
+        std::string out_file_name = OUTPUT_FILE + in_file_name.substr(slash_pos + 1, in_file_name.size() - slash_pos - 1) + ".out";
+
+        int out_fd;
+        if ((out_fd=open(out_file_name.data(), O_WRONLY | O_CREAT, PERMS)) == -1) {
+            perror("worker open output");
+            close(pipe_fd);
+            exit(EXIT_FAILURE);
+        }
+        for(std::map<std::string, int>::const_iterator it = link_nums.begin() ; it != link_nums.end() ; ++it) {
+            write(out_fd, it->first.data(), it->first.size());
+            write(out_fd, " ", 1);
+            write(out_fd, std::to_string(it->second).data(), std::to_string(it->second).size());
+            write(out_fd, "\n", 1);
+        }
+        close(out_fd);
+
+        //sigprocmask(SIG_UNBLOCK, &block_set, NULL);
+        if (raise(SIGSTOP) != 0) {
+            perror("worker raise SIGSTOP");
+            close(pipe_fd);
             exit(EXIT_FAILURE);
         }
     }
-    //new_files.push_back(new_file);
-    /*for(int i = 0 ; i < new_files.size();i++) {
-        std::cout << new_files[i] << std::endl;
-    }*/
-    sleep(1);kill(listen_pid, SIGINT);   // kill listener
-    /* Exiting successfully */
-    exit(EXIT_SUCCESS);
+    printf("worker exiting %s, %d\n", argv[1], sigterm_received);
+    close(pipe_fd);
+    return (EXIT_SUCCESS);
 }

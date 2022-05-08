@@ -14,17 +14,21 @@
 #define PERMS 0644
 #define OUTPUT_FILE "output/"
 
-volatile sig_atomic_t sigint_received = 0;
+volatile sig_atomic_t sigterm_received = 0;
 
-void catchint (int signo) {
+void catchterm (int signo) {
     write(1, "got signal\n", 11);
-    sigint_received = 1;
+    sigterm_received = 1;
 }
 
 int main(int argc, char* argv[]) {
     static struct sigaction act;
-    act.sa_handler = catchint;
+    act.sa_flags = 0;
+    act.sa_handler = catchterm;
     sigfillset(&(act.sa_mask));
+    sigaction(SIGTERM, &act, NULL);
+    
+    act.sa_handler = SIG_IGN;
     sigaction(SIGINT, &act, NULL);
 
     sigset_t block_set;
@@ -45,7 +49,7 @@ int main(int argc, char* argv[]) {
     FD_ZERO(&fds);
     FD_SET(pipe_fd, &fds);
     struct timeval timeout = {0,0};
-    while (!sigint_received) {
+    while (!sigterm_received) {
         //sigprocmask(SIG_SETMASK, &block_set, NULL);
         printf("worker loop\n");
         fflush(stdout);
@@ -53,6 +57,7 @@ int main(int argc, char* argv[]) {
         std::string in_file_name;
         int nread;
         for (int i =0;i<5;i++) {
+            printf("waiting on read\n");
             nread = read(pipe_fd, buf, 100);
             printf("nread %d\n", nread);
             fflush(stdout);
@@ -62,14 +67,14 @@ int main(int argc, char* argv[]) {
                 //if (errno == EINTR) {
                 //printf("errno == EINTR\n");
                 //fflush(stdout);
-                if (sigint_received) {
-                    printf("sigint_received\n");
+                if (sigterm_received) {
+                    printf("sigterm_received\n");
                     fflush(stdout);
                     close(pipe_fd);
                     exit(EXIT_SUCCESS);
                 }
                 else {
-                    printf("not sigint_received\n");
+                    printf("not sigterm_received\n");
                     fflush(stdout);
                     continue;
                 }
@@ -93,12 +98,12 @@ int main(int argc, char* argv[]) {
             printf("sfgd");
             fflush(stdout);
         }
-        if (sigint_received) {
+        if (sigterm_received) {
             break;
         }
         std::cout << "worker working on " + in_file_name <<std::endl;
         std::cout << in_file_name <<std::endl;
-        if (sigint_received) {
+        if (sigterm_received) {
             break;
         }
         int in_fd;
@@ -107,7 +112,7 @@ int main(int argc, char* argv[]) {
             close(pipe_fd);
             exit(EXIT_FAILURE);
         }
-        if (sigint_received) {
+        if (sigterm_received) {
             break;
         }
         std::string link;
@@ -216,7 +221,7 @@ int main(int argc, char* argv[]) {
             exit(EXIT_FAILURE);
         }
     }
-    printf("worker exiting %s, %d\n", argv[1], sigint_received);
+    printf("worker exiting %s, %d\n", argv[1], sigterm_received);
     close(pipe_fd);
     return (EXIT_SUCCESS);
 }
