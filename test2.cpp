@@ -25,6 +25,16 @@ struct worker {
     std::string pipe_name;
 };
 
+#define PERMS 0644
+#define OUTPUT_FILE "output/"
+
+volatile sig_atomic_t sigterm_received = 0;
+
+void catchterm (int signo) {
+    write(1, "got signal\n", 11);
+    sigterm_received = 1;
+}
+
 volatile sig_atomic_t sigint_received = 0;
 volatile sig_atomic_t sigchld_received = 0;
 volatile sig_atomic_t listen_read_fd = 0;
@@ -138,11 +148,89 @@ int main(int argc, char* argv[]) {
                             break;
                         }
                         else if (worker_pid == 0) {
-                            sigprocmask(SIG_UNBLOCK, &block_set, NULL);
-                            //printf("creating worker\n");
-                            execl("./bin/worker", "worker", pipe_name.data(), NULL);   // execute worker
-                            perror("worker execlp");
-                            exit(EXIT_FAILURE);
+                            static struct sigaction act_wor;
+                            act_wor.sa_flags = 0;
+                            act_wor.sa_handler = catchterm;
+                            sigfillset(&(act_wor.sa_mask));
+                            sigaction(SIGTERM, &act_wor, NULL);
+                            
+                            act_wor.sa_handler = SIG_IGN;
+                            sigaction(SIGINT, &act_wor, NULL);
+
+                            sigset_t block_set;
+                            sigfillset(&block_set);
+
+                            //act.sa_flags = SA_RESTART;
+                            //sigaction(SIGCONT, &act, NULL);
+
+                            std::cout << "worker created " <<std::endl;
+                            fflush(stdout);
+                            //std::string pipe_name = pipe_name.data();
+                            int pipe_fd;
+                            if ((pipe_fd = open(pipe_name.data(), O_RDONLY)) == -1) {
+                                perror("worker open fifo");
+                                exit(EXIT_FAILURE);
+                            }
+                            fd_set fds;
+                            FD_ZERO(&fds);
+                            FD_SET(pipe_fd, &fds);
+                            struct timeval timeout = {0,0};
+                            while (!sigterm_received) {
+                                //sigprocmask(SIG_SETMASK, &block_set, NULL);
+                                printf("worker loop\n");
+                                fflush(stdout);
+                                char buf_wor[100];
+                                std::string in_file_name;
+                                int nread;
+                                printf("waiting on read\n");
+                                while (nread = read(pipe_fd, buf_wor, 100)) {
+                                    printf("nread %d\n", nread);
+                                    fflush(stdout);
+                                    if (nread == -1) {
+                                        printf("nread == -1\n");
+                                        fflush(stdout);
+                                        if (errno == EINTR) {
+                                            printf("errno == EINTR\n");
+                                            fflush(stdout);
+                                            if (sigterm_received) {
+                                                printf("sigterm_received\n");
+                                                fflush(stdout);
+                                                close(pipe_fd);
+                                                exit(EXIT_SUCCESS);
+                                            }
+                                            else {
+                                                printf("not sigterm_received\n");
+                                                fflush(stdout);
+                                                continue;
+                                            }
+                                        }
+                                        else {
+                                            printf("errno != EINTR\n");
+                                            fflush(stdout);
+                                            perror("worker read fifo");
+                                            close(pipe_fd);
+                                            exit(EXIT_FAILURE);
+                                        }
+                                    }
+                                    std::string from_pipe(buf_wor);
+                                    std::cout << from_pipe << std::endl;
+                                    in_file_name.append(from_pipe.substr(0, nread));
+                                    if (select(pipe_fd+1, &fds, (fd_set *) 0, (fd_set *) 0, &timeout) == 0) {
+                                        break;
+                                    }
+                                }
+                                std::cout << "worker working on " + in_file_name <<std::endl;
+
+                                //sigprocmask(SIG_UNBLOCK, &block_set, NULL);
+                                if (raise(SIGSTOP) != 0) {
+                                    perror("worker raise SIGSTOP");
+                                    close(pipe_fd);
+                                    exit(EXIT_FAILURE);
+                                }
+                            }
+                            printf("worker exiting %s, %d\n", argv[1], sigterm_received);
+                            close(pipe_fd);
+                            return (EXIT_SUCCESS);
                         }
                         worker_pids.push_back(worker_pid);
                         if ((new_pipe_fd = open(pipe_name.data(), O_WRONLY)) < 0) {

@@ -56,36 +56,35 @@ int main(int argc, char* argv[]) {
         char buf[100];
         std::string in_file_name;
         int nread;
-        for (int i =0;i<5;i++) {
-            printf("waiting on read\n");
-            nread = read(pipe_fd, buf, 100);
+        printf("waiting on read\n");
+        while (nread = read(pipe_fd, buf, 100)) {
             printf("nread %d\n", nread);
             fflush(stdout);
-            if (nread == 0) {
-                printf("nread == 0\n");
+            if (nread == -1) {
+                printf("nread == -1\n");
                 fflush(stdout);
-                //if (errno == EINTR) {
-                //printf("errno == EINTR\n");
-                //fflush(stdout);
-                if (sigterm_received) {
-                    printf("sigterm_received\n");
+                if (errno == EINTR) {
+                    printf("errno == EINTR\n");
                     fflush(stdout);
-                    close(pipe_fd);
-                    exit(EXIT_SUCCESS);
+                    if (sigterm_received) {
+                        printf("sigterm_received\n");
+                        fflush(stdout);
+                        close(pipe_fd);
+                        exit(EXIT_SUCCESS);
+                    }
+                    else {
+                        printf("not sigterm_received\n");
+                        fflush(stdout);
+                        continue;
+                    }
                 }
                 else {
-                    printf("not sigterm_received\n");
+                    printf("errno != EINTR\n");
                     fflush(stdout);
-                    continue;
+                    perror("worker read fifo");
+                    close(pipe_fd);
+                    exit(EXIT_FAILURE);
                 }
-                //}
-                //else {
-                //    printf("errno != EINTR\n");
-                //    fflush(stdout);
-                //    perror("worker read fifo");
-                //    close(pipe_fd);
-                //    exit(EXIT_FAILURE);
-                //}
             }
             std::string from_pipe(buf);
             std::cout << from_pipe << std::endl;

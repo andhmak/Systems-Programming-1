@@ -13,7 +13,7 @@ do
         link=$(echo $line | cut -f 1 -d " ")
         tld="${link##*.}"
         occurences=$(echo $line | cut -f 2 -d " ")
-        if [ ${tlds[$tld]+_} ]; then ((tlds[$tld]+=occurences)); fi
+        if [ ! -z "$tld" ]; then if [ ${tlds[$tld]+_} ]; then ((tlds[$tld]+=occurences)); fi; fi
     done <$file 
 done
 

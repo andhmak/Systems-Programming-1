@@ -14,214 +14,117 @@
 #define PERMS 0644
 #define OUTPUT_FILE "output/"
 
+volatile sig_atomic_t sigint_received = 0;
+
+void catchint (int signo) {
+    write(1, "got signal int\n", 15);
+    sigint_received = 1;
+}
+
 volatile sig_atomic_t sigterm_received = 0;
 
 void catchterm (int signo) {
-    write(1, "got signal\n", 11);
+    write(1, "got signal term\n", 15);
     sigterm_received = 1;
 }
 
 int main(int argc, char* argv[]) {
     static struct sigaction act;
     act.sa_flags = 0;
-    act.sa_handler = catchterm;
+    act.sa_handler = catchint;
     sigfillset(&(act.sa_mask));
-    sigaction(SIGTERM, &act, NULL);
-    
-    act.sa_handler = SIG_IGN;
     sigaction(SIGINT, &act, NULL);
 
-    sigset_t block_set;
-    sigfillset(&block_set);
-
-    //act.sa_flags = SA_RESTART;
-    //sigaction(SIGCONT, &act, NULL);
-
-    std::cout << "worker created " <<std::endl;
-    fflush(stdout);
-    std::string pipe_name = argv[1];
     int pipe_fd;
-    if ((pipe_fd = open(pipe_name.data(), O_RDONLY)) == -1) {
-        perror("worker open fifo");
-        exit(EXIT_FAILURE);
-    }
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(pipe_fd, &fds);
-    struct timeval timeout = {0,0};
-    while (!sigterm_received) {
-        //sigprocmask(SIG_SETMASK, &block_set, NULL);
-        printf("worker loop\n");
-        fflush(stdout);
-        char buf[100];
-        std::string in_file_name;
-        int nread;
-        for (int i =0;i<5;i++) {
-            printf("waiting on read\n");
-            nread = read(pipe_fd, buf, 100);
-            printf("nread %d\n", nread);
-            fflush(stdout);
-            if (nread == 0) {
-                printf("nread == 0\n");
-                fflush(stdout);
-                //if (errno == EINTR) {
-                //printf("errno == EINTR\n");
-                //fflush(stdout);
-                if (sigterm_received) {
-                    printf("sigterm_received\n");
-                    fflush(stdout);
-                    close(pipe_fd);
-                    exit(EXIT_SUCCESS);
-                }
-                else {
-                    printf("not sigterm_received\n");
-                    fflush(stdout);
-                    continue;
-                }
-                //}
-                //else {
-                //    printf("errno != EINTR\n");
-                //    fflush(stdout);
-                //    perror("worker read fifo");
-                //    close(pipe_fd);
-                //    exit(EXIT_FAILURE);
-                //}
-            }
-            std::string from_pipe(buf);
-            std::cout << from_pipe << std::endl;
-            in_file_name.append(from_pipe.substr(0, nread));
-            if (select(pipe_fd+1, &fds, (fd_set *) 0, (fd_set *) 0, &timeout) == 0) {
-                break;
-            }
-        }
-        if (!nread) {
-            printf("sfgd");
-            fflush(stdout);
-        }
-        if (sigterm_received) {
-            break;
-        }
-        std::cout << "worker working on " + in_file_name <<std::endl;
-        std::cout << in_file_name <<std::endl;
-        if (sigterm_received) {
-            break;
-        }
-        int in_fd;
-        if ((in_fd = open(in_file_name.data(), O_RDONLY)) == -1) {
-            perror("worker open input");
-            close(pipe_fd);
+    mkfifo("haha", 0666);
+    int pid;
+    if ((pid=fork()) == 0) {
+        static struct sigaction act;
+        act.sa_flags = 0;
+        act.sa_handler = catchterm;
+        sigfillset(&(act.sa_mask));
+        sigaction(SIGTERM, &act, NULL);
+        act.sa_handler = SIG_IGN;
+        sigaction(SIGINT, &act, NULL);
+        if ((pipe_fd = open("haha", O_RDONLY)) == -1) {
+            perror("worker open fifo1");
             exit(EXIT_FAILURE);
         }
-        if (sigterm_received) {
-            break;
-        }
-        std::string link;
-        std::map<std::string,int> link_nums;
-        char state = 0;
-        while ((nread = read(in_fd, buf, 100)) > 0) {
-            for (int i = 0 ; i < nread ; i++) {
-                if (state == 7) {
-                    if ((buf[i] == ' ') || (buf[i] == '\n') || (buf[i] == '/')) {
-                        state = 0;
-                        if ((link.length() >= 4) && (link.substr(0,4) == "www.")) {
-                            link.erase(0,4);
-                        }
-                        if (link_nums.find(link) != link_nums.end()) {
-                            link_nums[link] = link_nums[link] + 1;
+        char buf[100];
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(pipe_fd, &fds);
+        struct timeval timeout = {0,0};
+        std::string  in_file_name;
+        while(!sigterm_received) {
+            while(1){
+                printf("wait on read");
+                fflush(stdout);
+                int nread = read(pipe_fd, buf, 100);
+                if (nread == -1) {
+                    printf("nread == -1\n");
+                    fflush(stdout);
+                    if (errno == EINTR) {
+                        printf("errno == EINTR\n");
+                        fflush(stdout);
+                        if (sigterm_received) {
+                            printf("sigterm_received\n");
+                            fflush(stdout);
+                            close(pipe_fd);
+                            exit(EXIT_SUCCESS);
                         }
                         else {
-                            link_nums[link] = 1;
+                            printf("not sigterm_received\n");
+                            fflush(stdout);
+                            continue;
                         }
-                        link.erase();
                     }
                     else {
-                        link.push_back(buf[i]);
+                        printf("errno != EINTR\n");
+                        fflush(stdout);
+                        perror("worker read fifo");
+                        close(pipe_fd);
+                        exit(EXIT_FAILURE);
                     }
                 }
-                else {
-                    switch (buf[i]) {
-                        case 'h':
-                            state = 1;
-                            break;
-                        case 't':
-                            if ((state == 1) || (state == 2)) {
-                                state++;
-                            }
-                            else {
-                                state = 0;
-                            }
-                            break;
-                        case 'p':
-                            state = state == 3 ? 4 : 0;
-                            break;
-                        case ':':
-                            state = state == 4 ? 5 : 0;
-                            break;
-                        case '/':
-                            if ((state == 5) || (state == 6)) {
-                                state++;
-                            }
-                            else {
-                                state = 0;
-                            }
-                            break;
-                        default:
-                            state = 0;
-                            break;
-
-                    }
+                std::string from_pipe(buf);
+                std::cout << from_pipe << std::endl;
+                in_file_name.append(from_pipe.substr(0, nread));
+                if (select(pipe_fd+1, &fds, (fd_set *) 0, (fd_set *) 0, &timeout) == 0) {
+                    break;
                 }
             }
-        }
-        if (nread == -1) {
-            perror("worker read input");
-            close(pipe_fd);
-            close(in_fd);
-            exit(EXIT_FAILURE);    
-        }
-        if (state == 7) {
-            if (link.substr(0,4) == "www.") {
-                link.erase(0,4);
-            }
-            if (link_nums.find(link) != link_nums.end()) {
-                link_nums[link] = link_nums[link] + 1;
-            }
-            else {
-                link_nums[link] = 1;
+            printf("got %s, and doing work", in_file_name.data());
+            fflush(stdout);
+            if (raise(SIGSTOP) != 0) {
+                perror("worker raise SIGSTOP");
+                close(pipe_fd);
+                exit(EXIT_FAILURE);
             }
         }
-        close(in_fd);
-
-        int slash_pos;
-        for (slash_pos = in_file_name.size() - 1 ; slash_pos >= 0 ; slash_pos--) {
-            if (in_file_name[slash_pos] == '/') {
-                break;
-            }
-        }
-        std::string out_file_name = OUTPUT_FILE + in_file_name.substr(slash_pos + 1, in_file_name.size() - slash_pos - 1) + ".out";
-
-        int out_fd;
-        if ((out_fd=open(out_file_name.data(), O_WRONLY | O_CREAT, PERMS)) == -1) {
-            perror("worker open output");
-            close(pipe_fd);
-            exit(EXIT_FAILURE);
-        }
-        for(std::map<std::string, int>::const_iterator it = link_nums.begin() ; it != link_nums.end() ; ++it) {
-            write(out_fd, it->first.data(), it->first.size());
-            write(out_fd, " ", 1);
-            write(out_fd, std::to_string(it->second).data(), std::to_string(it->second).size());
-            write(out_fd, "\n", 1);
-        }
-        close(out_fd);
-
-        //sigprocmask(SIG_UNBLOCK, &block_set, NULL);
-        if (raise(SIGSTOP) != 0) {
-            perror("worker raise SIGSTOP");
-            close(pipe_fd);
-            exit(EXIT_FAILURE);
-        }
+        printf("finished");
+        fflush(stdout);
     }
-    printf("worker exiting %s, %d\n", argv[1], sigterm_received);
-    close(pipe_fd);
-    return (EXIT_SUCCESS);
+    else {
+        if ((pipe_fd = open("haha", O_WRONLY)) == -1) {
+            perror("worker open fifo2");
+            exit(EXIT_FAILURE);
+        }
+        char bufg[100];
+        while (!sigint_received) {
+            while(read(1, bufg, 20)>0) {
+                kill(pid, SIGCONT);
+                printf("sending %s\n", bufg);
+                fflush(stdout);
+                write(pipe_fd, bufg, 20);
+            }
+        }
+        sleep(3);
+        printf("sending cont\n");
+        fflush(stdout);
+        kill(pid, SIGCONT);
+        sleep(3);
+        kill(pid, SIGTERM);
+        pause();
+    }
 }
