@@ -14,6 +14,8 @@ build/worker.o: src/worker.cpp
 	@echo " Compile worker ...";
 	g++ -I ./include/ -c -o ./build/worker.o ./src/worker.cpp
 
+all: bin/sniffer bin/worker
+
 run: bin/sniffer bin/worker
 	./bin/sniffer -p ~/watch
 

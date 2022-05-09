@@ -20,23 +20,28 @@
 #define READ 0
 #define WRITE 1
 
-struct worker {
-    int pid;
-    std::string pipe_name;
-};
-
 volatile sig_atomic_t sigint_received = 0;
 volatile sig_atomic_t sigchld_received = 0;
 volatile sig_atomic_t listen_read_fd = 0;
+volatile sig_atomic_t async_listen_pid;
 
+/* SIGINT handler */
 void catchint (int signo) {
-    write(1, "got signal\n", 11);
+    //write(1, "got signal\n", 11);
     if (listen_read_fd) {
         fcntl(listen_read_fd, F_SETFL, fcntl(listen_read_fd, F_GETFL, 0) | O_NONBLOCK);
     }
     sigint_received = 1;
 }
-void catchchld (int signo) {
+
+/* SIGCHLD handler */
+void catchchld (int signo, siginfo_t *info, void *context) {
+    /* If something happened to the listener, start the termination process */
+    if (info->si_pid == async_listen_pid) {
+        raise(SIGINT);
+        return;
+    }
+    /* Else notify that a worker has finished */
     sigchld_received = 1;
 }
 
@@ -46,7 +51,8 @@ int main(int argc, char* argv[]) {
     sigfillset(&(act.sa_mask));
     sigaction(SIGINT, &act, NULL);
 
-    act.sa_handler = catchchld;
+    act.sa_flags = SA_SIGINFO;
+    act.sa_sigaction = catchchld;
     sigaction(SIGCHLD, &act, NULL);
 
     std::string path = ".";
@@ -72,12 +78,16 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
     listen_read_fd = listen_pipe[READ];
+    sigset_t block_set;
+    sigfillset(&block_set);
+    sigprocmask(SIG_SETMASK, &block_set, NULL);
     if ((listen_pid = fork()) == -1) {
         perror("manager: listener fork");
         exit(EXIT_FAILURE);
     }
     /* Child */
     else if (listen_pid == 0) {
+        sigprocmask(SIG_UNBLOCK, &block_set, NULL);
         close(listen_pipe[READ]);  // don't read from the pipe
         dup2(listen_pipe[WRITE],1); // send standard output to the pipe
         close(listen_pipe[WRITE]);  // close old descriptor for writing to the pipe
@@ -87,6 +97,8 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
     /* Parent */
+    async_listen_pid = listen_pid;
+    sigprocmask(SIG_UNBLOCK, &block_set, NULL);
     close(listen_pipe[WRITE]);  // don't write to the pipe
 
 
@@ -106,8 +118,6 @@ int main(int argc, char* argv[]) {
     int i;
     int new_pipe_fd;
     int state = 0;
-    sigset_t block_set;
-    sigfillset(&block_set);
     std::cout << "manager starting loop" << std::endl;
     /*for (int b = 0;b<2;b++)*/
     while (!sigint_received) {
@@ -203,34 +213,39 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+    sigprocmask(SIG_SETMASK, &block_set, NULL);
     printf("jjejeje");
     fflush(stdout);
     kill(listen_pid, SIGINT);   // kill listener
     int child_pid;
     int proc_status;
+    //printf("%d, %d\n",available_workers.size(),num_workers);
+    //fflush(stdout);
     while (available_workers.size() != num_workers) {
         waitpid(-1, &proc_status, WUNTRACED);
         num_workers--;
     }
+    printf("a\n");
+    fflush(stdout);
     for (int i = 0 ; i < worker_pids.size() ; i++) {
         printf("continuing worker...");
         fflush(stdout);
         kill(worker_pids[i], SIGCONT);
-        sleep(1);
-        sleep(1);
-        sleep(1);
-        sleep(1);
         printf("interrupting worker...");
         fflush(stdout);
         kill(worker_pids[i], SIGTERM);
-        sleep(4);
     }
-    while (waitpid(-1, &proc_status, 0) > 0);
+    printf("b\n");
+    fflush(stdout);
+    while ((child_pid = waitpid(-1, &proc_status, 0)) > 0) {
+        printf("%d", child_pid);
+    }
+    printf("c\n");
+    fflush(stdout);
     for (int i = 0 ; i < worker_pids.size() ; i++) {
         printf("closing fifo...");
         fflush(stdout);
         close(worker_to_pipe[worker_pids[i]]);
-        sleep(1);
         std::string pipe_name = "pipes/" + std::to_string(i);
         printf("unlinking fifo...");
         fflush(stdout);
@@ -238,13 +253,17 @@ int main(int argc, char* argv[]) {
             perror("manager can't unlink fifo\n");
             exit(EXIT_FAILURE);
         }
-        sleep(1);
     }
+    printf("d\n");
+    fflush(stdout);
     //new_files.push_back(new_file);
     /*for(int i = 0 ; i < new_files.size();i++) {
         std::cout << new_files[i] << std::endl;
     }*/
     //while(1);
+    sigprocmask(SIG_UNBLOCK, &block_set, NULL);
+    printf("e\n");
+    fflush(stdout);
     /* Exiting successfully */
     exit(EXIT_SUCCESS);
 }
