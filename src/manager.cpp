@@ -113,7 +113,7 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> new_files;
     char buf[100];
     int nread;
-    int num_workers;
+    int num_workers = 0;
     int worker_pid;
     int i;
     int new_pipe_fd;
