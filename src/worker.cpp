@@ -1,7 +1,6 @@
-/* File: worker.c */
+/* File: worker.cpp */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string>
 #include <map>
 #include <fcntl.h>
@@ -12,11 +11,14 @@
 #include <iostream>
 
 #define PERMS 0644
-#define OUTPUT_FILE "output/"
+#define OUTPUT_DIR "output/"
+
+#define BUFFER_SIZE 100
 
 volatile sig_atomic_t sigterm_received = 0;
 volatile sig_atomic_t pipe_fd = 0;
 
+/* SIGTERM handler */
 void catchterm (int signo) {
     //write(1, "got signal\n", 11);
     if (pipe_fd) {
@@ -26,41 +28,62 @@ void catchterm (int signo) {
 }
 
 int main(int argc, char* argv[]) {
+    /* Set SIGTERM handler */
     static struct sigaction act;
     act.sa_flags = 0;
     act.sa_handler = catchterm;
     sigfillset(&(act.sa_mask));
     sigaction(SIGTERM, &act, NULL);
     
+    /* Ignore SIGINTs, so that the user interrupt to the manager won't possibly affect */
     act.sa_handler = SIG_IGN;
     sigaction(SIGINT, &act, NULL);
 
-    sigset_t block_set;
-    sigfillset(&block_set);
-
-    //act.sa_flags = SA_RESTART;
-    //sigaction(SIGCONT, &act, NULL);
-
     std::cout << "worker created " <<std::endl;
     fflush(stdout);
-    std::string pipe_name = argv[1];
-    if ((pipe_fd = open(pipe_name.data(), O_RDONLY)) == -1) {
-        perror("worker open fifo");
+
+    /* Open pipe, retrying if interrupted by signal */
+    while (pipe_fd = open(argv[1], O_RDONLY | O_NONBLOCK)) {
+        if (pipe_fd == -1) {
+            if (errno != EINTR) {
+                perror("worker open fifo");
+                exit(EXIT_FAILURE);
+            }
+        }
+        else {
+            break;
+        }
+    }
+    if (raise(SIGSTOP) != 0) {
+        perror("worker raise SIGSTOP");
+        close(pipe_fd);
         exit(EXIT_FAILURE);
     }
+
+    fcntl(pipe_fd, F_SETFL, fcntl(pipe_fd, F_GETFL, 0) & ~O_NONBLOCK);
+
+    /* Put pipe into file descriptor set to call select() later  */
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(pipe_fd, &fds);
-    struct timeval timeout = {0,0};
+    struct timespec timeout = {0,0};
+
+    /* Create block set for sigprocmask() later */
+    sigset_t block_set;
+    sigfillset(&block_set);
+
+    /* Main loop, processing one file each time */
     while (!sigterm_received) {
         printf("worker loop\n");
         fflush(stdout);
-        char buf[100];
-        std::string in_file_name;
-        int nread;
+        char buf[BUFFER_SIZE];      // buffer for reading
+        std::string in_file_name;   // name of the name input file to process
+        int nread;                  // number of characters read
         printf("waiting on read\n");
+
+        /* Read the input file specified by the manager in the pipe */
         while (1) {
-            nread = read(pipe_fd, buf, 100);
+            nread = read(pipe_fd, buf, BUFFER_SIZE);
             if (sigterm_received) {
                 printf("sigterm_received\n");
                 fflush(stdout);
@@ -79,14 +102,13 @@ int main(int argc, char* argv[]) {
                     exit(EXIT_FAILURE);
                 }
             }
-            std::string from_pipe(buf);
-            std::cout << from_pipe << std::endl;
-            in_file_name.append(from_pipe.substr(0, nread));
-            if (select(pipe_fd+1, &fds, (fd_set *) 0, (fd_set *) 0, &timeout) == 0) {
+            in_file_name.append(buf, 0, nread);
+            if (pselect(pipe_fd+1, &fds, (fd_set *) 0, (fd_set *) 0, &timeout, &block_set) == 0) {
                 break;
             }
         }
         sigprocmask(SIG_SETMASK, &block_set, NULL);
+
         std::cout << "worker working on " + in_file_name <<std::endl;
         std::cout << in_file_name <<std::endl;
         int in_fd;
@@ -98,7 +120,7 @@ int main(int argc, char* argv[]) {
         std::string link;
         std::map<std::string,int> link_nums;
         char state = 0;
-        while ((nread = read(in_fd, buf, 100)) > 0) {
+        while ((nread = read(in_fd, buf, BUFFER_SIZE)) > 0) {
             for (int i = 0 ; i < nread ; i++) {
                 if (state == 7) {
                     if ((buf[i] == ' ') || (buf[i] == '\n') || (buf[i] == '/')) {
@@ -178,7 +200,7 @@ int main(int argc, char* argv[]) {
                 break;
             }
         }
-        std::string out_file_name = OUTPUT_FILE + in_file_name.substr(slash_pos + 1, in_file_name.size() - slash_pos - 1) + ".out";
+        std::string out_file_name = OUTPUT_DIR + in_file_name.substr(slash_pos + 1, in_file_name.size() - slash_pos - 1) + ".out";
 
         int out_fd;
         if ((out_fd=open(out_file_name.data(), O_WRONLY | O_CREAT, PERMS)) == -1) {
