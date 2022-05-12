@@ -30,11 +30,11 @@ all: sniffer bin/worker
 
 run: sniffer bin/worker
 	@echo " Run sniffer with no arguments ...";
-	./bin/sniffer -p ~/watch
+	./sniffer
 
 clean:
 	@echo " Delete binary and build ...";
-	-rm -f ./bin/* ./build/* ./output/*.out sniffer
+	-rm -f ./bin/* ./build/* sniffer
 
 cleanup:
 	@echo " Delete output ...";
