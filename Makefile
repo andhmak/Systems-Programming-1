@@ -1,24 +1,41 @@
-bin/sniffer: build/manager.o
+sniffer: build/manager.o build/manager_funcs.o build/close_report.o
 	@echo " Link sniffer ...";
-	g++ -g -L ./lib/ -Wl,-rpath,./lib/ ./build/manager.o -o ./bin/sniffer
+	g++ -g ./build/manager.o build/manager_funcs.o build/close_report.o -o sniffer
 
 build/manager.o: src/manager.cpp
 	@echo " Compile manager ...";
 	g++ -I ./include/ -g -c -o ./build/manager.o ./src/manager.cpp
 
-bin/worker: build/worker.o
+build/manager_funcs.o: src/manager_funcs.cpp
+	@echo " Compile manager_funcs ...";
+	g++ -I ./include/ -g -c -o ./build/manager_funcs.o ./src/manager_funcs.cpp
+
+bin/worker: build/worker.o build/worker_funcs.o build/close_report.o
 	@echo " Link worker ...";
-	g++ -g -L ./lib/ -Wl,-rpath,./lib/ ./build/worker.o -o ./bin/worker
+	g++ -g ./build/worker.o ./build/worker_funcs.o ./build/close_report.o -o ./bin/worker
 
 build/worker.o: src/worker.cpp
 	@echo " Compile worker ...";
 	g++ -I ./include/ -g -c -o ./build/worker.o ./src/worker.cpp
 
-all: bin/sniffer bin/worker
+build/worker_funcs.o: src/worker_funcs.cpp
+	@echo " Compile worker_funcs ...";
+	g++ -I ./include/ -g -c -o ./build/worker_funcs.o ./src/worker_funcs.cpp
 
-run: bin/sniffer bin/worker
+build/close_report.o: src/close_report.cpp
+	@echo " Compile close_report ...";
+	g++ -I ./include/ -g -c -o ./build/close_report.o ./src/close_report.cpp
+
+all: sniffer bin/worker
+
+run: sniffer bin/worker
+	@echo " Run sniffer with no arguments ...";
 	./bin/sniffer -p ~/watch
 
 clean:
-	@echo " Delete binary, build and output ...";
-	-rm -f ./bin/sniffer ./bin/worker ./build/manager.o ./build/worker.o ./output/*.out ./pipes/*
+	@echo " Delete binary and build ...";
+	-rm -f ./bin/* ./build/* ./output/*.out sniffer
+
+cleanup:
+	@echo " Delete output ...";
+	-rm -f ./bin/* ./build/* ./output/*.out

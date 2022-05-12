@@ -9,21 +9,27 @@
 #include <sys/types.h>
 #include <signal.h>
 #include <iostream>
+#include "worker_funcs.h"
+#include "close_report.h"
 
-#define PERMS 0644
 #define OUTPUT_DIR "output/"
 
 #define BUFFER_SIZE 100
 
+/* Flag indicating SIGTERM was received */
 volatile sig_atomic_t sigterm_received = 0;
+
+/* The file descriptor of the worker's named pipe */
 volatile sig_atomic_t pipe_fd = 0;
 
 /* SIGTERM handler */
 void catchterm (int signo) {
     //write(1, "got signal\n", 11);
-    if (pipe_fd) {
+    /* If the pipe has been successfully opened, stop waiting on read */
+    if (pipe_fd > 0) {
         fcntl(pipe_fd, F_SETFL, fcntl(pipe_fd, F_GETFL, 0) | O_NONBLOCK);
     }
+    /* Raise flag */
     sigterm_received = 1;
 }
 
@@ -35,14 +41,14 @@ int main(int argc, char* argv[]) {
     sigfillset(&(act.sa_mask));
     sigaction(SIGTERM, &act, NULL);
     
-    /* Ignore SIGINTs, so that the user interrupt to the manager won't possibly affect */
+    /* Ignore SIGINTs, so that the user interrupt to the manager won't possibly affect the worker */
     act.sa_handler = SIG_IGN;
     sigaction(SIGINT, &act, NULL);
 
     std::cout << "worker created " <<std::endl;
     fflush(stdout);
 
-    /* Open pipe, retrying if interrupted by signal */
+    /* Open pipe for reading without blocking, retrying if interrupted by signal */
     while (pipe_fd = open(argv[1], O_RDONLY | O_NONBLOCK)) {
         if (pipe_fd == -1) {
             if (errno != EINTR) {
@@ -54,15 +60,18 @@ int main(int argc, char* argv[]) {
             break;
         }
     }
+
+    /* If successfully opened, stop and wait for the manager to wake us up */
     if (raise(SIGSTOP) != 0) {
         perror("worker raise SIGSTOP");
-        close(pipe_fd);
+        close_report(pipe_fd);
         exit(EXIT_FAILURE);
     }
 
+    /* Block on read from the pipe, only needed non-blocking opening */
     fcntl(pipe_fd, F_SETFL, fcntl(pipe_fd, F_GETFL, 0) & ~O_NONBLOCK);
 
-    /* Put pipe into file descriptor set to call select() later  */
+    /* Put pipe into file descriptor set to call pselect() later  */
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(pipe_fd, &fds);
@@ -73,7 +82,7 @@ int main(int argc, char* argv[]) {
     sigfillset(&block_set);
 
     /* Main loop, processing one file each time */
-    while (!sigterm_received) {
+    while (1) {
         printf("worker loop\n");
         fflush(stdout);
         char buf[BUFFER_SIZE];      // buffer for reading
@@ -83,117 +92,57 @@ int main(int argc, char* argv[]) {
 
         /* Read the input file specified by the manager in the pipe */
         while (1) {
+            /* Read at most BUFFER_SIZE bytes from the pipe */
+            /* Block until there is data in the pipe or a signal interrupts */
             nread = read(pipe_fd, buf, BUFFER_SIZE);
+
+            /* If interrupted by SIGTERM, exit successfully */
             if (sigterm_received) {
                 printf("sigterm_received\n");
                 fflush(stdout);
-                close(pipe_fd);
+                close_report(pipe_fd);
                 exit(EXIT_SUCCESS);
             }
+
+            /* If not, but still failed to read */
             if (nread == -1) {
+                /* If interrupted, retry */
                 if (errno == EINTR) {
                     printf("errno == EINTR\n");
                     fflush(stdout);
                     continue;
                 }
+                /* Else fail */
                 else {
                     perror("worker read fifo");
-                    close(pipe_fd);
+                    close_report(pipe_fd);
                     exit(EXIT_FAILURE);
                 }
             }
+
+            /* Append what was read to the input file name */
             in_file_name.append(buf, 0, nread);
+
+            /* Stop reading if there is no more data in the pipe */
             if (pselect(pipe_fd+1, &fds, (fd_set *) 0, (fd_set *) 0, &timeout, &block_set) == 0) {
                 break;
             }
         }
+
+        /* Block signals and start working on the input file */
         sigprocmask(SIG_SETMASK, &block_set, NULL);
 
         std::cout << "worker working on " + in_file_name <<std::endl;
         std::cout << in_file_name <<std::endl;
-        int in_fd;
-        if ((in_fd = open(in_file_name.data(), O_RDONLY)) == -1) {
-            perror("worker open input");
-            close(pipe_fd);
+
+        /* Create a map with the URLs as keys and their number of appearences in the input file as values */
+        std::map<std::string,int> url_nums;
+        if (extract_urls(url_nums, in_file_name.data()) == -1) {
+            close_report(pipe_fd);
             exit(EXIT_FAILURE);
         }
-        std::string link;
-        std::map<std::string,int> link_nums;
-        char state = 0;
-        while ((nread = read(in_fd, buf, BUFFER_SIZE)) > 0) {
-            for (int i = 0 ; i < nread ; i++) {
-                if (state == 7) {
-                    if ((buf[i] == ' ') || (buf[i] == '\n') || (buf[i] == '/')) {
-                        state = 0;
-                        if ((link.length() >= 4) && (link.substr(0,4) == "www.")) {
-                            link.erase(0,4);
-                        }
-                        if (link_nums.find(link) != link_nums.end()) {
-                            link_nums[link] = link_nums[link] + 1;
-                        }
-                        else {
-                            link_nums[link] = 1;
-                        }
-                        link.erase();
-                    }
-                    else {
-                        link.push_back(buf[i]);
-                    }
-                }
-                else {
-                    switch (buf[i]) {
-                        case 'h':
-                            state = 1;
-                            break;
-                        case 't':
-                            if ((state == 1) || (state == 2)) {
-                                state++;
-                            }
-                            else {
-                                state = 0;
-                            }
-                            break;
-                        case 'p':
-                            state = state == 3 ? 4 : 0;
-                            break;
-                        case ':':
-                            state = state == 4 ? 5 : 0;
-                            break;
-                        case '/':
-                            if ((state == 5) || (state == 6)) {
-                                state++;
-                            }
-                            else {
-                                state = 0;
-                            }
-                            break;
-                        default:
-                            state = 0;
-                            break;
 
-                    }
-                }
-            }
-        }
-        if (nread == -1) {
-            perror("worker read input");
-            close(pipe_fd);
-            close(in_fd);
-            exit(EXIT_FAILURE);    
-        }
-        if (state == 7) {
-            if (link.substr(0,4) == "www.") {
-                link.erase(0,4);
-            }
-            if (link_nums.find(link) != link_nums.end()) {
-                link_nums[link] = link_nums[link] + 1;
-            }
-            else {
-                link_nums[link] = 1;
-            }
-        }
-        close(in_fd);
-
+        /* Replace the path of the input file with the output path, and add ".out" to the end, to produce the output file name */
         int slash_pos;
         for (slash_pos = in_file_name.size() - 1 ; slash_pos >= 0 ; slash_pos--) {
             if (in_file_name[slash_pos] == '/') {
@@ -202,28 +151,20 @@ int main(int argc, char* argv[]) {
         }
         std::string out_file_name = OUTPUT_DIR + in_file_name.substr(slash_pos + 1, in_file_name.size() - slash_pos - 1) + ".out";
 
-        int out_fd;
-        if ((out_fd=open(out_file_name.data(), O_WRONLY | O_CREAT, PERMS)) == -1) {
-            perror("worker open output");
-            close(pipe_fd);
+        /* Write the URLs and their appearences in the output file */
+        if (write_urls(url_nums, out_file_name.data()) == -1) {
+            close_report(pipe_fd);
             exit(EXIT_FAILURE);
         }
-        for(std::map<std::string, int>::const_iterator it = link_nums.begin() ; it != link_nums.end() ; ++it) {
-            write(out_fd, it->first.data(), it->first.size());
-            write(out_fd, " ", 1);
-            write(out_fd, std::to_string(it->second).data(), std::to_string(it->second).size());
-            write(out_fd, "\n", 1);
-        }
-        close(out_fd);
 
+        /* Finished working on current file, unblock signals */
         sigprocmask(SIG_UNBLOCK, &block_set, NULL);
+
+        /* Stop and wait for manager to wake us up */
         if (raise(SIGSTOP) != 0) {
             perror("worker raise SIGSTOP");
-            close(pipe_fd);
+            close_report(pipe_fd);
             exit(EXIT_FAILURE);
         }
     }
-    printf("worker exiting %s, %d\n", argv[1], sigterm_received);
-    close(pipe_fd);
-    return (EXIT_SUCCESS);
 }
