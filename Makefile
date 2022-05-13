@@ -38,4 +38,4 @@ clean:
 
 cleanup:
 	@echo " Delete output ...";
-	-rm -f ./bin/* ./build/* ./output/*.out
+	-rm -f ./output/*.out

@@ -45,14 +45,11 @@ int main(int argc, char* argv[]) {
     act.sa_handler = SIG_IGN;
     sigaction(SIGINT, &act, NULL);
 
-    std::cout << "worker created " <<std::endl;
-    fflush(stdout);
-
     /* Open pipe for reading without blocking, retrying if interrupted by signal */
     while (pipe_fd = open(argv[1], O_RDONLY | O_NONBLOCK)) {
         if (pipe_fd == -1) {
             if (errno != EINTR) {
-                perror("worker open fifo");
+                perror("worker: open fifo");
                 exit(EXIT_FAILURE);
             }
         }
@@ -63,7 +60,7 @@ int main(int argc, char* argv[]) {
 
     /* If successfully opened, stop and wait for the manager to wake us up */
     if (raise(SIGSTOP) != 0) {
-        perror("worker raise SIGSTOP");
+        perror("worker: raise SIGSTOP");
         close_report(pipe_fd);
         exit(EXIT_FAILURE);
     }
@@ -83,12 +80,9 @@ int main(int argc, char* argv[]) {
 
     /* Main loop, processing one file each time */
     while (1) {
-        printf("worker loop\n");
-        fflush(stdout);
         char buf[BUFFER_SIZE];      // buffer for reading
         std::string in_file_name;   // name of the name input file to process
         int nread;                  // number of characters read
-        printf("waiting on read\n");
 
         /* Read the input file specified by the manager in the pipe */
         while (1) {
@@ -98,8 +92,6 @@ int main(int argc, char* argv[]) {
 
             /* If interrupted by SIGTERM, exit successfully */
             if (sigterm_received) {
-                printf("sigterm_received\n");
-                fflush(stdout);
                 close_report(pipe_fd);
                 exit(EXIT_SUCCESS);
             }
@@ -108,13 +100,11 @@ int main(int argc, char* argv[]) {
             if (nread == -1) {
                 /* If interrupted, retry */
                 if (errno == EINTR) {
-                    printf("errno == EINTR\n");
-                    fflush(stdout);
                     continue;
                 }
                 /* Else fail */
                 else {
-                    perror("worker read fifo");
+                    perror("worker: read fifo");
                     close_report(pipe_fd);
                     exit(EXIT_FAILURE);
                 }
@@ -131,9 +121,6 @@ int main(int argc, char* argv[]) {
 
         /* Block signals and start working on the input file */
         sigprocmask(SIG_SETMASK, &block_set, NULL);
-
-        std::cout << "worker working on " + in_file_name <<std::endl;
-        std::cout << in_file_name <<std::endl;
 
         /* Create a map with the URLs as keys and their number of appearences in the input file as values */
         std::map<std::string,int> url_nums;
@@ -162,7 +149,7 @@ int main(int argc, char* argv[]) {
 
         /* Stop and wait for manager to wake us up */
         if (raise(SIGSTOP) != 0) {
-            perror("worker raise SIGSTOP");
+            perror("worker: raise SIGSTOP");
             close_report(pipe_fd);
             exit(EXIT_FAILURE);
         }

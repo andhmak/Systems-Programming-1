@@ -10,11 +10,11 @@
 
 /* Attempts to create a worker and give it new_file to process, updating all structures as necessary. */
 /* Returns 0 on success, -1 on failure. If manager is fine but worker failed, it is considered a success. */
-int make_worker(std::string &new_file, const char* pipe_dir, std::vector<int> &worker_pids, std::map<int,int> &worker_to_pipe, int &num_alive_workers, sigset_t block_set) {
+int make_worker(std::string &new_file, const char* pipe_dir, std::map<int,int> &worker_to_pipe, int &num_alive_workers, sigset_t block_set) {
     /* Make named pipe */
-    std::string pipe_name = pipe_dir + std::to_string(worker_pids.size());
+    std::string pipe_name = pipe_dir + std::to_string(worker_to_pipe.size());
     if (mkfifo(pipe_name.data(), 0666) < 0) {
-        perror("manager: can't make fifo");
+        perror("manager: make fifo");
         return -1;
     }
 
@@ -29,7 +29,6 @@ int make_worker(std::string &new_file, const char* pipe_dir, std::vector<int> &w
     else if (worker_pid == 0) {
         /* Unblock signals */
         sigprocmask(SIG_UNBLOCK, &block_set, NULL);
-        //printf("creating worker\n");
         /* Execute worker */
         execl("./bin/worker", "worker", pipe_name.data(), NULL);
         perror("worker: execl");
@@ -43,25 +42,24 @@ int make_worker(std::string &new_file, const char* pipe_dir, std::vector<int> &w
         perror("manager: waitpid");
         return -1;
     }
+
     /* If it terminated, move on */
     if ((!WIFSTOPPED(proc_status)) || (WSTOPSIG(proc_status) != SIGSTOP)) {
-        printf("worker issue\n");
-        fflush(stdout);
         /* Destroy the pipe made */
         if (unlink(pipe_name.data()) < 0) {
             return -1;
         }
     }
+
     /* If it succeeded, pass it the information about the file it needs to process and update the structures */
     else {
-        /* Add pid to workersand increase number of alive workers by 1 */
-        worker_pids.push_back(worker_pid);
+        /* Increase number of alive workers by 1 */
         num_alive_workers++;
 
         /* Open pipe for writing */
         int new_pipe_fd;
         if ((new_pipe_fd = open(pipe_name.data(), O_WRONLY)) < 0) {
-            perror("manager: can't open fifo");
+            perror("manager: open fifo");
             return -1;
         }
 
@@ -70,7 +68,7 @@ int make_worker(std::string &new_file, const char* pipe_dir, std::vector<int> &w
 
         /* Write the file name to the pipe */
         if (write(new_pipe_fd, new_file.data(), new_file.size()) != new_file.size()) {
-            perror("manager: can't write in fifo");
+            perror("manager: write in fifo");
             return -1;
         }
         
@@ -88,8 +86,7 @@ int gather_children(std::queue<int> &available_workers, int &num_alive_workers, 
     /* Wait while there are children with changed states */
     int child_pid, proc_status;
     while ((child_pid = waitpid(-1, &proc_status, WNOHANG | WUNTRACED))) {
-        printf("a");
-        fflush(stdout);
+
         /* If waitpid failed */
         if (child_pid == -1) {
             /* Retry if interrupted */
@@ -102,6 +99,7 @@ int gather_children(std::queue<int> &available_workers, int &num_alive_workers, 
                 return -1;
             }
         }
+
         /* If a worker changed state */
         else if (child_pid != listen_pid) {
             /* If it stopped */
