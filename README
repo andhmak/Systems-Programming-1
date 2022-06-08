@@ -1,3 +1,7 @@
+Greek text readable with "cat". Not with "pico".
+
+sdi1900047
+
 Το πρώτο ζητούμενο της εργασίας έχει υλοποιηθεί σε c++.
 
 Είναι χωρισμένο σε 5 αρχεία κώδικα (manager.cpp, manager_funcs.cpp, worker.cpp, worker_funcs.cpp, close_report.cpp) και 3 κεφαλίδες
